@@ -1,5 +1,9 @@
 # esp-idf-lib/ads111x
 
+[![Build examples](https://github.com/esp-idf-lib/ads111x/actions/workflows//build.yml/badge.svg)](https://github.com/esp-idf-lib/ads111x/actions/workflows//build.yml)
+[![Build docs](https://github.com/esp-idf-lib/ads111x/actions/workflows//build-docs.yml/badge.svg)](https://github.com/esp-idf-lib/ads111x/actions/workflows//build-docs.yml)
+[![Validation](https://github.com/esp-idf-lib/ads111x/actions/workflows//validate-component.yml/badge.svg)](https://github.com/esp-idf-lib/ads111x/actions/workflows//validate-component.yml)
+
 Driver for ADS1113/ADS1114/ADS1115 and ADS1013/ADS1014/ADS1015 I2C ADC.
 
 * [Documentation](https://esp-idf-lib.github.io/ads111x/)
@@ -11,7 +15,7 @@ Driver for ADS1113/ADS1114/ADS1115 and ADS1013/ADS1014/ADS1015 I2C ADC.
 ## Installation
 
 ```sh
-idf.py add-dependency esp-idf-lib/ads111x^1.1.2
+idf.py add-dependency esp-idf-lib/ads111x
 ```
 
 ## Support
