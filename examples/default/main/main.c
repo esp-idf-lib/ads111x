@@ -27,7 +27,7 @@ static float gain_val;
 static void measure(size_t n)
 {
     // wait for conversion end
-    bool busy;
+    // bool busy;
     // do
     // {
     //     ads111x_is_busy(&devices[n], &busy);
