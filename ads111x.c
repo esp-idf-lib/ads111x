@@ -74,7 +74,8 @@
 
 static const char *TAG = "ads111x";
 
-const float ads111x_gain_values[] = {
+const float ads111x_gain_values[] =
+{
     [ADS111X_GAIN_6V144]   = 6.144,
     [ADS111X_GAIN_4V096]   = 4.096,
     [ADS111X_GAIN_2V048]   = 2.048,
@@ -113,7 +114,7 @@ static esp_err_t write_reg(i2c_dev_t *dev, uint8_t reg, uint16_t val)
 }
 
 static esp_err_t read_conf_bits(i2c_dev_t *dev, uint8_t offs, uint16_t mask,
-        uint16_t *bits)
+                                uint16_t *bits)
 {
     CHECK_ARG(dev);
 
@@ -131,7 +132,7 @@ static esp_err_t read_conf_bits(i2c_dev_t *dev, uint8_t offs, uint16_t mask,
 }
 
 static esp_err_t write_conf_bits(i2c_dev_t *dev, uint16_t val, uint8_t offs,
-        uint16_t mask)
+                                 uint16_t mask)
 {
     CHECK_ARG(dev);
 
@@ -160,7 +161,7 @@ static esp_err_t write_conf_bits(i2c_dev_t *dev, uint16_t val, uint8_t offs,
 ///////////////////////////////////////////////////////////////////////////////
 
 esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
-        gpio_num_t sda_gpio, gpio_num_t scl_gpio)
+                            gpio_num_t sda_gpio, gpio_num_t scl_gpio)
 {
     CHECK_ARG(dev);
 

@@ -13,7 +13,8 @@
 #define GAIN ADS111X_GAIN_4V096 // +-4.096V
 
 // I2C addresses
-static const uint8_t addr[CONFIG_EXAMPLE_DEV_COUNT] = {
+static const uint8_t addr[CONFIG_EXAMPLE_DEV_COUNT] =
+{
     ADS111X_ADDR_GND,
     ADS111X_ADDR_VCC
 };

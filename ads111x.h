@@ -62,13 +62,13 @@ extern "C" {
 #define ADS101X_MAX_VALUE 0x7ff
 
 // ADS101X overrides
-#define ADS101X_DATA_RATE_128  	ADS111X_DATA_RATE_8
-#define ADS101X_DATA_RATE_250  	ADS111X_DATA_RATE_16
-#define ADS101X_DATA_RATE_490  	ADS111X_DATA_RATE_32
-#define ADS101X_DATA_RATE_920  	ADS111X_DATA_RATE_64
-#define ADS101X_DATA_RATE_1600	ADS111X_DATA_RATE_128
-#define ADS101X_DATA_RATE_2400	ADS111X_DATA_RATE_250
-#define ADS101X_DATA_RATE_3300	ADS111X_DATA_RATE_475
+#define ADS101X_DATA_RATE_128   ADS111X_DATA_RATE_8
+#define ADS101X_DATA_RATE_250   ADS111X_DATA_RATE_16
+#define ADS101X_DATA_RATE_490   ADS111X_DATA_RATE_32
+#define ADS101X_DATA_RATE_920   ADS111X_DATA_RATE_64
+#define ADS101X_DATA_RATE_1600  ADS111X_DATA_RATE_128
+#define ADS101X_DATA_RATE_2400  ADS111X_DATA_RATE_250
+#define ADS101X_DATA_RATE_3300  ADS111X_DATA_RATE_475
 
 /**
  * Gain amplifier
@@ -178,7 +178,7 @@ typedef enum
  * @return `ESP_OK` on success
  */
 esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
-        gpio_num_t sda_gpio, gpio_num_t scl_gpio);
+                            gpio_num_t sda_gpio, gpio_num_t scl_gpio);
 
 /**
  * @brief Free device descriptor
