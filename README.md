@@ -216,7 +216,7 @@ voltages.
 1. Install the component from the registry:
 
 ```sh
-idf.py add-dependency "esp-idf-lib/ads111x^1.2.0"
+idf.py add-dependency "esp-idf-lib/ads111x"
 ```
 
 2. Or clone the repository into the `components` directory of your project:
