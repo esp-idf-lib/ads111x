@@ -40,10 +40,21 @@
  */
 
 #include <esp_log.h>
-#include <esp_idf_lib_helpers.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include "ads111x.h"
 
-#define I2C_FREQ_HZ 1000000 // Max 1MHz for esp32
+/*
+ * The datasheet guarantees 400 kHz in the fast mode and 3.4 MHz only in the
+ * high-speed mode, which the master enters by sending the high-speed master
+ * code 00001xxx before the address; the chip does not acknowledge that code
+ * and the I2C driver has no API to send it, so the high-speed mode is out of
+ * reach. The chip runs at 1 MHz in practice, which is what this driver uses;
+ * lower it here or through dev->cfg.master.clk_speed on a slow bus.
+ */
+#ifndef ADS111X_I2C_FREQ_HZ
+#define ADS111X_I2C_FREQ_HZ 1000000
+#endif
 
 #define REG_CONVERSION 0
 #define REG_CONFIG     1
@@ -164,6 +175,10 @@ esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
                             gpio_num_t sda_gpio, gpio_num_t scl_gpio)
 {
     CHECK_ARG(dev);
+    CHECK_ARG(port >= 0 && port < I2C_NUM_MAX);
+    CHECK_ARG(GPIO_IS_VALID_OUTPUT_GPIO(sda_gpio));
+    CHECK_ARG(GPIO_IS_VALID_OUTPUT_GPIO(scl_gpio));
+    CHECK_ARG(sda_gpio != scl_gpio);
 
     if (addr != ADS111X_ADDR_GND && addr != ADS111X_ADDR_VCC
             && addr != ADS111X_ADDR_SDA && addr != ADS111X_ADDR_SCL)
@@ -176,9 +191,10 @@ esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
     dev->addr = addr;
     dev->cfg.sda_io_num = sda_gpio;
     dev->cfg.scl_io_num = scl_gpio;
-#if HELPER_TARGET_IS_ESP32
-    dev->cfg.master.clk_speed = I2C_FREQ_HZ;
-#endif
+    // The pull-up flags are left as the caller has set them: the chip needs
+    // external resistors anyway, and the internal ones are only a fallback.
+    if (!dev->cfg.master.clk_speed)
+        dev->cfg.master.clk_speed = ADS111X_I2C_FREQ_HZ;
     return i2c_dev_create_mutex(dev);
 }
 
@@ -186,7 +202,14 @@ esp_err_t ads111x_free_desc(i2c_dev_t *dev)
 {
     CHECK_ARG(dev);
 
-    return i2c_dev_delete_mutex(dev);
+    esp_err_t res = i2c_dev_delete_mutex(dev);
+    if (res == ESP_OK)
+    {
+        dev->mutex = NULL;
+        dev->dev_handle = NULL;
+    }
+
+    return res;
 }
 
 esp_err_t ads111x_is_busy(i2c_dev_t *dev, bool *busy)
@@ -200,6 +223,34 @@ esp_err_t ads111x_is_busy(i2c_dev_t *dev, bool *busy)
     return ESP_OK;
 }
 
+esp_err_t ads111x_wait_conversion(i2c_dev_t *dev, uint32_t timeout_ms)
+{
+    CHECK_ARG(dev);
+    CHECK_ARG(timeout_ms > 0);
+
+    TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    if (!timeout)
+        timeout = 1;
+
+    TickType_t start = xTaskGetTickCount();
+    bool busy;
+
+    for (;;)
+    {
+        CHECK(ads111x_is_busy(dev, &busy));
+        if (!busy)
+            return ESP_OK;
+
+        if (xTaskGetTickCount() - start >= timeout)
+        {
+            ESP_LOGE(TAG, "The conversion did not finish in %u ms", (unsigned)timeout_ms);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        vTaskDelay(1);
+    }
+}
+
 esp_err_t ads111x_start_conversion(i2c_dev_t *dev)
 {
     return write_conf_bits(dev, 1, OS_OFFSET, OS_MASK);
@@ -209,9 +260,13 @@ esp_err_t ads111x_get_value(i2c_dev_t *dev, int16_t *value)
 {
     CHECK_ARG(dev && value);
 
+    uint16_t raw;
+
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, read_reg(dev, REG_CONVERSION, (uint16_t *)value));
+    I2C_DEV_CHECK(dev, read_reg(dev, REG_CONVERSION, &raw));
     I2C_DEV_GIVE_MUTEX(dev);
+
+    *value = (int16_t)raw;
 
     return ESP_OK;
 }
@@ -220,16 +275,19 @@ esp_err_t ads101x_get_value(i2c_dev_t *dev, int16_t *value)
 {
     CHECK_ARG(dev && value);
 
+    uint16_t raw;
+
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, read_reg(dev, REG_CONVERSION, (uint16_t *)value));
+    I2C_DEV_CHECK(dev, read_reg(dev, REG_CONVERSION, &raw));
     I2C_DEV_GIVE_MUTEX(dev);
 
-    *value = *value >> 4;
-    if (*value > 0x07FF)
-    {
-        // negative number - extend the sign to 16th bit
-        *value |= 0xF000;
-    }
+    // the result is left-justified in the 16-bit register: the upper 12 bits
+    // hold a signed value, so convert it to a signed 16-bit value by hand
+    int32_t v = raw >> 4;
+    if (v & 0x0800)
+        v -= 0x1000;
+    *value = (int16_t)v;
+
     return ESP_OK;
 }
 
@@ -240,6 +298,8 @@ esp_err_t ads111x_get_gain(i2c_dev_t *dev, ads111x_gain_t *gain)
 
 esp_err_t ads111x_set_gain(i2c_dev_t *dev, ads111x_gain_t gain)
 {
+    CHECK_ARG(dev && gain >= ADS111X_GAIN_6V144 && gain <= ADS111X_GAIN_0V256_3);
+
     return write_conf_bits(dev, gain, PGA_OFFSET, PGA_MASK);
 }
 
@@ -250,6 +310,8 @@ esp_err_t ads111x_get_input_mux(i2c_dev_t *dev, ads111x_mux_t *mux)
 
 esp_err_t ads111x_set_input_mux(i2c_dev_t *dev, ads111x_mux_t mux)
 {
+    CHECK_ARG(dev && mux >= ADS111X_MUX_0_1 && mux <= ADS111X_MUX_3_GND);
+
     return write_conf_bits(dev, mux, MUX_OFFSET, MUX_MASK);
 }
 
@@ -260,6 +322,8 @@ esp_err_t ads111x_get_mode(i2c_dev_t *dev, ads111x_mode_t *mode)
 
 esp_err_t ads111x_set_mode(i2c_dev_t *dev, ads111x_mode_t mode)
 {
+    CHECK_ARG(dev && mode >= ADS111X_MODE_CONTINUOUS && mode <= ADS111X_MODE_SINGLE_SHOT);
+
     return write_conf_bits(dev, mode, MODE_OFFSET, MODE_MASK);
 }
 
@@ -270,6 +334,8 @@ esp_err_t ads111x_get_data_rate(i2c_dev_t *dev, ads111x_data_rate_t *rate)
 
 esp_err_t ads111x_set_data_rate(i2c_dev_t *dev, ads111x_data_rate_t rate)
 {
+    CHECK_ARG(dev && rate >= ADS111X_DATA_RATE_8 && rate <= ADS111X_DATA_RATE_860);
+
     return write_conf_bits(dev, rate, DR_OFFSET, DR_MASK);
 }
 
@@ -280,6 +346,8 @@ esp_err_t ads111x_get_comp_mode(i2c_dev_t *dev, ads111x_comp_mode_t *mode)
 
 esp_err_t ads111x_set_comp_mode(i2c_dev_t *dev, ads111x_comp_mode_t mode)
 {
+    CHECK_ARG(dev && mode >= ADS111X_COMP_MODE_NORMAL && mode <= ADS111X_COMP_MODE_WINDOW);
+
     return write_conf_bits(dev, mode, COMP_MODE_OFFSET, COMP_MODE_MASK);
 }
 
@@ -290,6 +358,8 @@ esp_err_t ads111x_get_comp_polarity(i2c_dev_t *dev, ads111x_comp_polarity_t *pol
 
 esp_err_t ads111x_set_comp_polarity(i2c_dev_t *dev, ads111x_comp_polarity_t polarity)
 {
+    CHECK_ARG(dev && polarity >= ADS111X_COMP_POLARITY_LOW && polarity <= ADS111X_COMP_POLARITY_HIGH);
+
     return write_conf_bits(dev, polarity, COMP_POL_OFFSET, COMP_POL_MASK);
 }
 
@@ -300,6 +370,8 @@ esp_err_t ads111x_get_comp_latch(i2c_dev_t *dev, ads111x_comp_latch_t *latch)
 
 esp_err_t ads111x_set_comp_latch(i2c_dev_t *dev, ads111x_comp_latch_t latch)
 {
+    CHECK_ARG(dev && latch >= ADS111X_COMP_LATCH_DISABLED && latch <= ADS111X_COMP_LATCH_ENABLED);
+
     return write_conf_bits(dev, latch, COMP_LAT_OFFSET, COMP_LAT_MASK);
 }
 
@@ -310,6 +382,8 @@ esp_err_t ads111x_get_comp_queue(i2c_dev_t *dev, ads111x_comp_queue_t *queue)
 
 esp_err_t ads111x_set_comp_queue(i2c_dev_t *dev, ads111x_comp_queue_t queue)
 {
+    CHECK_ARG(dev && queue >= ADS111X_COMP_QUEUE_1 && queue <= ADS111X_COMP_QUEUE_DISABLED);
+
     return write_conf_bits(dev, queue, COMP_QUE_OFFSET, COMP_QUE_MASK);
 }
 
@@ -317,9 +391,13 @@ esp_err_t ads111x_get_comp_low_thresh(i2c_dev_t *dev, int16_t *th)
 {
     CHECK_ARG(dev && th);
 
+    uint16_t raw;
+
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, read_reg(dev, REG_THRESH_L, (uint16_t *)th));
+    I2C_DEV_CHECK(dev, read_reg(dev, REG_THRESH_L, &raw));
     I2C_DEV_GIVE_MUTEX(dev);
+
+    *th = (int16_t)raw;
 
     return ESP_OK;
 }
@@ -329,7 +407,7 @@ esp_err_t ads111x_set_comp_low_thresh(i2c_dev_t *dev, int16_t th)
     CHECK_ARG(dev);
 
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, write_reg(dev, REG_THRESH_L, th));
+    I2C_DEV_CHECK(dev, write_reg(dev, REG_THRESH_L, (uint16_t)th));
     I2C_DEV_GIVE_MUTEX(dev);
 
     return ESP_OK;
@@ -339,9 +417,13 @@ esp_err_t ads111x_get_comp_high_thresh(i2c_dev_t *dev, int16_t *th)
 {
     CHECK_ARG(dev && th);
 
+    uint16_t raw;
+
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, read_reg(dev, REG_THRESH_H, (uint16_t *)th));
+    I2C_DEV_CHECK(dev, read_reg(dev, REG_THRESH_H, &raw));
     I2C_DEV_GIVE_MUTEX(dev);
+
+    *th = (int16_t)raw;
 
     return ESP_OK;
 }
@@ -351,7 +433,7 @@ esp_err_t ads111x_set_comp_high_thresh(i2c_dev_t *dev, int16_t th)
     CHECK_ARG(dev);
 
     I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, write_reg(dev, REG_THRESH_H, th));
+    I2C_DEV_CHECK(dev, write_reg(dev, REG_THRESH_H, (uint16_t)th));
     I2C_DEV_GIVE_MUTEX(dev);
 
     return ESP_OK;
