@@ -2,8 +2,10 @@ menu "Example configuration"
     config EXAMPLE_DEV_COUNT
         int "Number of ADS111x"
         default 2
+        range 1 2
         help
-            Number of ADS111x devices on the bus.
+            Number of ADS111x devices on the bus. The example expects them at
+            the two addresses the ADDR pin selects: GND (0x48) and VCC (0x49).
 
     rsource "../../../Kconfig.i2c"
 endmenu

@@ -5,9 +5,13 @@ The datasheet can be found [here](https://www.ti.com/product/ADS1115).
 ## What it does
 
 The example configures two `ADS1115` devices on an `I2C` bus. One has pin
-`ADDR` connected to `GND`, and another has pin `ADDR` connected to `VCC`. The
-example initializes two devices, and shows raw ADC values and voltages in a
-loop.
+`ADDR` connected to `GND`, and another has pin `ADDR` connected to `VCC`. Both
+devices are switched to the single-shot mode at 32 samples per second and the
+gain is ±4.096 V. In a loop, every 500 ms, the example walks over the four
+single-ended inputs `AIN0`…`AIN3` against `GND` for every device: it switches
+the multiplexer, starts a conversion, waits for the result with a timeout and
+prints the raw ADC value together with the voltage. Inputs that are left
+floating show noise, which is expected.
 
 ## Wiring
 

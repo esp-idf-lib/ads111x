@@ -33,7 +33,7 @@
  *
  * ESP-IDF driver for ADS1113/ADS1114/ADS1115, ADS1013/ADS1014/ADS1015 I2C ADC
  *
- * Version: 1.1.2
+ * Version: 1.2.0
  *
  * Ported from esp-open-rtos
  *
@@ -175,7 +175,19 @@ typedef enum
  * @param port I2C port number
  * @param sda_gpio GPIO pin for SDA
  * @param scl_gpio GPIO pin for SCL
- * @return `ESP_OK` on success
+ *
+ * Sets the bus speed to ::ADS111X_I2C_FREQ_HZ unless `dev->cfg.master.clk_speed`
+ * already holds a value, and does not touch the pull-up flags: the bus needs
+ * external resistors, and the internal ones are only a fallback for a short
+ * and slow bus. Both can be set in `dev->cfg` before this call or changed after
+ * it and before the first operation.
+ *
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the port is out of range, a pin is not an
+ *        output-capable GPIO or the pins are equal, or the address is not one
+ *        of ::ADS111X_ADDR_GND,
+ *        ::ADS111X_ADDR_VCC, ::ADS111X_ADDR_SDA, ::ADS111X_ADDR_SCL
  */
 esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
                             gpio_num_t sda_gpio, gpio_num_t scl_gpio);
@@ -183,45 +195,105 @@ esp_err_t ads111x_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port,
 /**
  * @brief Free device descriptor
  *
+ * Releases the device handle and the mutex. The descriptor is not reusable
+ * after this call: initialize it again with ::ads111x_init_desc().
+ *
  * @param dev Device descriptor
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
  */
 esp_err_t ads111x_free_desc(i2c_dev_t *dev);
 
 /**
  * @brief Get device operational status
  *
+ * Reads the OS bit of the configuration register: on read it is 0 while the
+ * device is performing a conversion and 1 when the conversion is complete.
+ *
+ * In the continuous mode the device converts back to back, so the bit always
+ * reads 0 and this function cannot be used to tell whether a fresh sample is
+ * available; read the conversion register at the pace of the data rate
+ * instead.
+ *
  * @param dev Device descriptor
- * @param[out] busy True when device performing conversion
- * @return `ESP_OK` on success
+ * @param[out] busy True while the device is performing a conversion
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if an argument is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_is_busy(i2c_dev_t *dev, bool *busy);
 
 /**
- * @brief Begin a single conversion
+ * @brief Wait for the current conversion to finish
  *
- * Only in single-shot mode.
+ * Polls ::ads111x_is_busy() once per tick until the OS bit reports that the
+ * conversion is complete. Useful in the single-shot mode, where the result
+ * must not be read before the conversion ends. In the continuous mode the bit
+ * always reads 0, so the function returns at once and tells nothing about the
+ * age of the sample.
+ *
+ * The timeout should exceed the conversion time of the configured data rate:
+ * the rate of 8 samples per second takes 125 ms, 860 samples per second takes
+ * 1.2 ms.
  *
  * @param dev Device descriptor
- * @return `ESP_OK` on success
+ * @param timeout_ms Timeout in milliseconds, must be greater than zero
+ * @return
+ *      - `ESP_OK` when the conversion is complete
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or the timeout is zero
+ *      - `ESP_ERR_TIMEOUT` if the conversion did not finish in time
+ *      - an error code from the I2C layer
+ */
+esp_err_t ads111x_wait_conversion(i2c_dev_t *dev, uint32_t timeout_ms);
+
+/**
+ * @brief Begin a single conversion
+ *
+ * Only in single-shot mode: the OS bit can be written only while the device
+ * is powered down, so in the continuous mode the call does nothing and still
+ * reports `ESP_OK`. After the call, wait for the conversion with
+ * ::ads111x_wait_conversion() before reading the result, otherwise the
+ * previous conversion is returned.
+ *
+ * @param dev Device descriptor
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_start_conversion(i2c_dev_t *dev);
 
 /**
  * @brief Read last conversion result
  *
+ * Returns the whole 16-bit conversion register as a signed value. In the
+ * single-shot mode the register holds the previous conversion until the
+ * current one completes (or zero after power up).
+ *
  * @param dev Device descriptor
- * @param[out] value Last conversion result
- * @return `ESP_OK` on success
+ * @param[out] value Last conversion result, from -32768 to 32767
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if an argument is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_get_value(i2c_dev_t *dev, int16_t *value);
 
 /**
  * @brief Read last conversion result for ADS101x
  *
+ * The 12-bit result is left-justified in the 16-bit register. The register is
+ * read as a whole, the lower four bits are dropped and the sign of the
+ * remaining value is extended, so the result is a signed 12-bit value.
+ *
  * @param dev Device descriptor
- * @param[out] value Last conversion result
- * @return `ESP_OK` on success
+ * @param[out] value Last conversion result, from -2048 to 2047
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if an argument is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads101x_get_value(i2c_dev_t *dev, int16_t *value);
 
@@ -244,7 +316,10 @@ esp_err_t ads111x_get_gain(i2c_dev_t *dev, ads111x_gain_t *gain);
  *
  * @param dev Device descriptor
  * @param gain Gain value
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_gain(i2c_dev_t *dev, ads111x_gain_t gain);
 
@@ -266,7 +341,10 @@ esp_err_t ads111x_get_input_mux(i2c_dev_t *dev, ads111x_mux_t *mux);
  *
  * @param dev Device descriptor
  * @param mux Input multiplexer configuration
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_input_mux(i2c_dev_t *dev, ads111x_mux_t mux);
 
@@ -284,7 +362,10 @@ esp_err_t ads111x_get_mode(i2c_dev_t *dev, ads111x_mode_t *mode);
  *
  * @param dev Device descriptor
  * @param mode Device operating mode
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_mode(i2c_dev_t *dev, ads111x_mode_t mode);
 
@@ -302,7 +383,10 @@ esp_err_t ads111x_get_data_rate(i2c_dev_t *dev, ads111x_data_rate_t *rate);
  *
  * @param dev Device descriptor
  * @param rate Data rate
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_data_rate(i2c_dev_t *dev, ads111x_data_rate_t rate);
 
@@ -320,11 +404,19 @@ esp_err_t ads111x_get_comp_mode(i2c_dev_t *dev, ads111x_comp_mode_t *mode);
 /**
  * @brief Set comparator mode
  *
+ * In the traditional mode the ALERT/RDY pin asserts when the result rises
+ * above the upper threshold and deasserts when it falls below the lower one.
+ * In the window mode the pin asserts outside the window, that is, when the
+ * result goes above the upper threshold or below the lower one.
+ *
  * ADS1114 and ADS1115 only.
  *
  * @param dev Device descriptor
  * @param mode Comparator mode
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_comp_mode(i2c_dev_t *dev, ads111x_comp_mode_t mode);
 
@@ -346,7 +438,10 @@ esp_err_t ads111x_get_comp_polarity(i2c_dev_t *dev, ads111x_comp_polarity_t *pol
  *
  * @param dev Device descriptor
  * @param polarity Comparator output pin polarity
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_comp_polarity(i2c_dev_t *dev, ads111x_comp_polarity_t polarity);
 
@@ -368,7 +463,10 @@ esp_err_t ads111x_get_comp_latch(i2c_dev_t *dev, ads111x_comp_latch_t *latch);
  *
  * @param dev Device descriptor
  * @param latch Comparator output latch mode
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_comp_latch(i2c_dev_t *dev, ads111x_comp_latch_t latch);
 
@@ -392,12 +490,20 @@ esp_err_t ads111x_get_comp_queue(i2c_dev_t *dev, ads111x_comp_queue_t *queue);
  *
  * @param dev Device descriptor
  * @param queue Number of the comparator conversions
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL` or
+ *        the value is outside the enumerated range
  */
 esp_err_t ads111x_set_comp_queue(i2c_dev_t *dev, ads111x_comp_queue_t queue);
 
 /**
  * @brief Get the lower threshold value used by comparator
+ *
+ * The threshold is a signed 16-bit value in the ADC codes of the current gain.
+ * On the ADS101x the chip compares it as a left-justified 12-bit value, so the
+ * meaningful range is the top twelve bits. To use the pin as a conversion-ready
+ * output, set the upper threshold MSB to 1 and the lower one to 0.
  *
  * @param dev Device descriptor
  * @param[out] th Lower threshold value
@@ -408,14 +514,21 @@ esp_err_t ads111x_get_comp_low_thresh(i2c_dev_t *dev, int16_t *th);
 /**
  * @brief Set the lower threshold value used by comparator
  *
+ * See ::ads111x_get_comp_low_thresh() for the format of the value.
+ *
  * @param dev Device descriptor
  * @param th Lower threshold value
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_set_comp_low_thresh(i2c_dev_t *dev, int16_t th);
 
 /**
  * @brief Get the upper threshold value used by comparator
+ *
+ * See ::ads111x_get_comp_low_thresh() for the format of the value.
  *
  * @param dev Device descriptor
  * @param[out] th Upper threshold value
@@ -426,9 +539,14 @@ esp_err_t ads111x_get_comp_high_thresh(i2c_dev_t *dev, int16_t *th);
 /**
  * @brief Set the upper threshold value used by comparator
  *
+ * See ::ads111x_get_comp_low_thresh() for the format of the value.
+ *
  * @param dev Device descriptor
  * @param th Upper threshold value
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_set_comp_high_thresh(i2c_dev_t *dev, int16_t th);
 
