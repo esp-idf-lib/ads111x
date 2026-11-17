@@ -47,9 +47,9 @@
 /*
  * The datasheet guarantees 400 kHz in the fast mode and 3.4 MHz only in the
  * high-speed mode, which the master enters by sending the high-speed master
- * code 00001xxx before the address; the chip does not acknowledge that code
- * and the I2C driver has no API to send it, so the high-speed mode is out of
- * reach. The chip runs at 1 MHz in practice, which is what this driver uses;
+ * code 00001xxx before the address; the I2C specification forbids
+ * acknowledging that code, and the I2C driver has no API to send such a
+ * header, so the high-speed mode is out of reach. The chip runs at 1 MHz in practice, which is what this driver uses;
  * lower it here or through dev->cfg.master.clk_speed on a slow bus.
  */
 #ifndef ADS111X_I2C_FREQ_HZ
@@ -152,6 +152,9 @@ static esp_err_t write_conf_bits(i2c_dev_t *dev, uint16_t val, uint8_t offs,
     I2C_DEV_TAKE_MUTEX(dev);
     I2C_DEV_CHECK(dev, read_reg(dev, REG_CONFIG, &old));
     // Issue #593
+    // Writing a configuration field must not start a conversion as a side
+    // effect: the OS bit reads 1 while the chip is idle, so a plain
+    // read-modify-write would put it back and begin a conversion.
     if (offs != OS_OFFSET || mask != OS_MASK)
         old &= ~(OS_MASK << OS_OFFSET);
     I2C_DEV_CHECK(dev, write_reg(dev, REG_CONFIG, (old & ~(mask << offs)) | (val << offs)));

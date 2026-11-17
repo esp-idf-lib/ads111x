@@ -211,10 +211,10 @@ esp_err_t ads111x_free_desc(i2c_dev_t *dev);
  * Reads the OS bit of the configuration register: on read it is 0 while the
  * device is performing a conversion and 1 when the conversion is complete.
  *
- * In the continuous mode the device converts back to back, so the bit reads 0
- * almost all the time and this function cannot be used to tell whether a
- * fresh sample is available; read the conversion register at the pace of the
- * data rate instead.
+ * In the continuous mode the device converts back to back, so the bit always
+ * reads 0 and this function cannot be used to tell whether a fresh sample is
+ * available; read the conversion register at the pace of the data rate
+ * instead.
  *
  * @param dev Device descriptor
  * @param[out] busy True while the device is performing a conversion
@@ -231,9 +231,8 @@ esp_err_t ads111x_is_busy(i2c_dev_t *dev, bool *busy);
  * Polls ::ads111x_is_busy() once per tick until the OS bit reports that the
  * conversion is complete. Useful in the single-shot mode, where the result
  * must not be read before the conversion ends. In the continuous mode the bit
- * is clear only for the short gaps between conversions, so the function
- * returns as soon as it observes one of them and tells nothing about the age
- * of the sample.
+ * always reads 0, so the function returns at once and tells nothing about the
+ * age of the sample.
  *
  * The timeout should exceed the conversion time of the configured data rate:
  * the rate of 8 samples per second takes 125 ms, 860 samples per second takes
@@ -405,6 +404,11 @@ esp_err_t ads111x_get_comp_mode(i2c_dev_t *dev, ads111x_comp_mode_t *mode);
 /**
  * @brief Set comparator mode
  *
+ * In the traditional mode the ALERT/RDY pin asserts when the result rises
+ * above the upper threshold and deasserts when it falls below the lower one.
+ * In the window mode the pin asserts outside the window, that is, when the
+ * result goes above the upper threshold or below the lower one.
+ *
  * ADS1114 and ADS1115 only.
  *
  * @param dev Device descriptor
@@ -510,9 +514,14 @@ esp_err_t ads111x_get_comp_low_thresh(i2c_dev_t *dev, int16_t *th);
 /**
  * @brief Set the lower threshold value used by comparator
  *
+ * See ::ads111x_get_comp_low_thresh() for the format of the value.
+ *
  * @param dev Device descriptor
  * @param th Lower threshold value
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_set_comp_low_thresh(i2c_dev_t *dev, int16_t th);
 
@@ -530,9 +539,14 @@ esp_err_t ads111x_get_comp_high_thresh(i2c_dev_t *dev, int16_t *th);
 /**
  * @brief Set the upper threshold value used by comparator
  *
+ * See ::ads111x_get_comp_low_thresh() for the format of the value.
+ *
  * @param dev Device descriptor
  * @param th Upper threshold value
- * @return `ESP_OK` on success
+ * @return
+ *      - `ESP_OK` on success
+ *      - `ESP_ERR_INVALID_ARG` if the descriptor is `NULL`
+ *      - an error code from the I2C layer
  */
 esp_err_t ads111x_set_comp_high_thresh(i2c_dev_t *dev, int16_t th);
 

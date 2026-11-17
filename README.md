@@ -37,8 +37,8 @@ analog-to-digital converters.
 
 ## Wiring
 
-The chips speak I²C at the 8-bit address `1001xxx0`, where `xxx` comes from the
-`ADDR` pin:
+The chips answer on the 7-bit address `1001xxx`, where `xxx` comes from the
+`ADDR` pin, so with the usual read/write bit the bus byte is `1001xxx0`:
 
 | `ADDR` pin         | 7-bit address | Macro                      |
 |--------------------|---------------|----------------------------|
@@ -60,10 +60,11 @@ are not a substitute for the resistors.
 ## Bus speed
 
 The datasheet describes the fast mode up to 400 kHz and a high-speed mode up to
-3.4 MHz. The high-speed mode requires the driver to send the Hs master code
-`00001xxx` before every transfer and to switch the bus timing, and the chip does
-not acknowledge that code, so it cannot be used with the ESP-IDF I²C master:
-the peripheral has no way to send such a header.
+3.4 MHz. The high-speed mode requires the master to send the Hs master code
+`00001xxx` before the address; the I²C specification forbids acknowledging that
+code, and the chip switches its input filters on when it sees it. The ESP-IDF
+master has no way to send such a header, so the high-speed mode is out of
+reach.
 
 The driver talks to the chip at 1 MHz, which is outside the fast mode but works
 in practice with short wires and proper pull-ups. Change
@@ -82,9 +83,9 @@ low four bits always read zero.
 In the single-shot mode a conversion starts when the OS bit is written to 1 and
 the chip powers down when it is done. The driver starts the conversion with
 `ads111x_start_conversion()`, which returns at once; the result is ready when
-the OS bit reads 1, which is exactly what `ads111x_is_busy()` reports. Waiting
-by polling needs a timeout, otherwise a missing or stuck chip hangs the caller,
-so use `ads111x_wait_conversion()`:
+the OS bit reads 1, and `ads111x_is_busy()` returns `true` while it reads 0.
+Waiting by polling needs a timeout, otherwise a missing or stuck chip hangs the
+caller, so use `ads111x_wait_conversion()`:
 
 ```c
 i2c_dev_t dev = { 0 };
@@ -127,8 +128,9 @@ the last result.
 | `ADS111X_GAIN_0V256` | ±0.256 V | 7.8125 µV  |
 
 The chip cannot measure above its supply voltage: with `VDD` at 3.3 V a signal
-of 4 V cannot be read, and the input must stay within `GND - 0.3 V` …
-`VDD + 0.3 V`.
+of 4 V cannot be read. For a valid conversion the inputs must stay between
+`GND` and `VDD`; the absolute maximum, beyond which the chip may be damaged, is
+`-0.3 V` … `VDD + 0.3 V`.
 
 ## Data rate
 
@@ -144,21 +146,31 @@ The comparator watches the conversion result against
 the `ALERT/RDY` pin according to `ads111x_set_comp_mode()`,
 `..._comp_polarity()`, `..._comp_latch()` and `..._comp_queue()`.
 
-In the latching mode the pin stays asserted until the conversion register is
-read, so the pulse cannot be missed; the non-latching mode follows the input and
-drops back as soon as a conversion falls inside the thresholds.
+In the traditional mode the pin asserts when the result rises above the high
+threshold and deasserts when it falls below the low one, so the two thresholds
+set the hysteresis of the alarm. In the window mode the pin asserts as soon as
+the result leaves the window, that is, goes above the high threshold or below
+the low one, and drops back when the result is inside the window again.
 
-The thresholds are 16-bit codes in the same left-justified format as the result,
-not volts: on the ADS101x the chip compares them as 12-bit values, so the low
-four bits are ignored. In the usual window mode the high threshold must be
-greater than the low one, and the window is entered with the high threshold
-having the MSB set and the low threshold cleared, so the driver writes the
-values as they are and expects the caller to keep them sensible:
+In the latching mode the pin stays asserted until the conversion register is
+read or an SMBus alert response arrives, so a short excursion cannot be missed;
+in the non-latching mode the pin follows the result.
+
+The thresholds are 16-bit codes in the same two's complement format as the
+result, not volts: on the ADS101x the chip compares them as left-justified
+12-bit values, so the low four bits do not matter. The high threshold must be
+greater than the low one, and the driver writes the values as they are:
 
 ```c
 ESP_ERROR_CHECK(ads111x_set_comp_high_thresh(&dev, 1000));
 ESP_ERROR_CHECK(ads111x_set_comp_low_thresh(&dev, -1000));
 ```
+
+To use the pin as a conversion-ready output, put the chip into the RDY mode:
+set the MSB of the high threshold to 1 and the MSB of the low threshold to 0.
+The pin then follows the OS bit in the single-shot mode and pulses on every
+completed conversion in the continuous mode. The driver writes the thresholds
+as given, so those bits are the caller's job.
 
 The default thresholds are `0x8000` (low) and `0x7FFF` (high) — the whole
 range, so the comparator never fires until they are changed.

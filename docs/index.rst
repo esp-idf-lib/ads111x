@@ -112,8 +112,9 @@ Bus speed
 ``ads111x_init_desc()`` sets the bus to 1 MHz. The datasheet guarantees
 400 kHz in the fast mode; 3.4 MHz belongs to the high-speed mode, which the
 master enters by sending the high-speed master code ``00001xxx`` before the
-address. The chip does not acknowledge that code, and the ESP-IDF driver has
-no way to send it, so the high-speed mode is out of reach and 1 MHz is above
+address; the I²C specification forbids acknowledging that code, and the chip
+switches its input filters on when it sees it. The ESP-IDF driver has no way to
+send such a header, so the high-speed mode is out of reach and 1 MHz is above
 the guaranteed limit, although the chip runs at it in practice.
 
 To change the speed, define ``ADS111X_I2C_FREQ_HZ`` for the component, or set
@@ -153,8 +154,9 @@ wait, read:
 ``ads111x_start_conversion()`` writes the OS bit, which can only be written
 while the device is powered down: in the continuous mode the call does
 nothing and still returns ``ESP_OK``. ``ads111x_is_busy()`` is therefore
-useful only in the single-shot mode; in the continuous mode the bit reads 0
-almost all the time and tells nothing about the freshness of the sample.
+useful only in the single-shot mode; in the continuous mode the chip converts
+back to back and the bit always reads 0, so it tells nothing about the freshness
+of the sample.
 
 The ADS101x keeps its 12-bit result left-justified in the 16-bit register,
 and ``ads101x_get_value()`` shifts it and extends the sign, so both drivers
@@ -208,7 +210,9 @@ The gain values are kept in ``ads111x_gain_values[]``, so the voltage is:
 
 The divisor is the full scale in codes, 32768 for the ADS111x and 2048 for the
 ADS101x, not the largest code: dividing by ``ADS111X_MAX_VALUE`` (32767) is off
-by one LSB. ``ADS101X_MAX_VALUE`` (2047) is the largest code of the 12-bit
+by one LSB. For a valid conversion the inputs must stay between ``GND`` and
+``VDD``; the absolute maximum, beyond which the chip may be damaged, is
+``-0.3 V`` … ``VDD + 0.3 V``. ``ADS101X_MAX_VALUE`` (2047) is the largest code of the 12-bit
 chip, not its full scale either.
 
 Data rate
@@ -226,22 +230,36 @@ Comparator
 
 The ADS1114/ADS1115 and ADS1014/ADS1015 have a comparator that drives the
 ``ALERT/RDY`` pin. The mode, the polarity, the latch and the queue length are
-configured with the corresponding functions. In the latching mode the pin stays
-asserted until the conversion register is read, so the pulse cannot be missed;
-the non-latching mode follows the input and drops back as soon as a conversion
-falls inside the thresholds. The thresholds are signed 16-bit values in ADC
-codes of the current gain: on the ADS101x the chip compares them
-as left-justified 12-bit values, so only the upper twelve bits matter. To use
-the pin as a conversion-ready output instead, set the MSB of the upper
-threshold to 1 and the MSB of the lower threshold to 0, as the datasheet
-describes.
+configured with the corresponding functions.
+
+In the traditional mode the pin asserts when the result rises above the high
+threshold and deasserts when it falls below the low one, so the thresholds set
+the hysteresis of the alarm. In the window mode the pin asserts as soon as the
+result leaves the window, that is, goes above the high threshold or below the
+low one, and drops back when the result is inside the window again.
+
+In the latching mode the pin stays asserted until the conversion register is
+read or an SMBus alert response arrives, so a short excursion cannot be missed;
+in the non-latching mode the pin follows the result.
+
+The thresholds are signed 16-bit values in ADC codes of the current gain, in the
+same two's complement format as the result: on the ADS101x the chip compares
+them as left-justified 12-bit values, so only the upper twelve bits matter. The
+high threshold must be greater than the low one.
+
+To use the pin as a conversion-ready output instead, set the MSB of the high
+threshold to 1 and the MSB of the low threshold to 0: the pin then follows the
+OS bit in the single-shot mode and pulses on every completed conversion in the
+continuous mode. The driver writes the thresholds as given, so those bits are
+the caller's job.
 
 Example
 -------
 
-See ``examples/default``. It reads two devices on one bus, one at the address
-0x48 and one at 0x49, prints the raw values and the voltages, and releases the
-descriptors at the end.
+See ``examples/default``. It reads up to two devices on one bus, at the
+addresses 0x48 and 0x49, and in a loop walks over the four single-ended inputs
+of each device: it switches the multiplexer, starts a conversion, waits for it
+with a timeout and prints the raw values and the voltages.
 
 API reference
 -------------
