@@ -7,5 +7,3 @@ dependencies:
     override_path: "../../../"
   esp-idf-lib/i2cdev:
     version: "*"
-  esp-idf-lib/esp_idf_lib_helpers:
-    version: "*"
